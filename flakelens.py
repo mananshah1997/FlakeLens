@@ -187,6 +187,26 @@ class GrafanaTableExtractor:
                 ))
         
         return queries
+
+    def _remove_comments(self, query: str) -> str:
+        """
+        Removes single-line (--) and multi-line (/* */) SQL comments from a query.
+        This is crucial for preventing regex from matching tables in commented-out code.
+        
+        Args:
+            query: SQL query string
+            
+        Returns:
+            Query string with comments removed.
+        """
+        # 1. Remove multi-line comments: /* ... */
+        # re.DOTALL allows '.' to match newlines
+        no_multiline = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
+        
+        # 2. Remove single-line comments: -- ... to end of line
+        no_singleline = re.sub(r'--[^\n]*', '', no_multiline)
+        
+        return no_singleline
     
     def clean_query(self, query: str) -> str:
         """
@@ -216,6 +236,7 @@ class GrafanaTableExtractor:
         Raises:
             ParseError: If sqlglot cannot parse the query
         """
+        # sqlglot handles comments naturally as a full parser
         tree = parse_one(query, read='snowflake')
         tables = set()
         
@@ -240,10 +261,14 @@ class GrafanaTableExtractor:
         Returns:
             Set of table names found via regex
         """
+        # FIX: Remove comments before applying regex patterns
+        query_without_comments = self._remove_comments(query)
+        
         tables = set()
         
         for pattern in self.TABLE_PATTERNS:
-            matches = re.findall(pattern, query, re.IGNORECASE)
+            # Use the query string with comments removed
+            matches = re.findall(pattern, query_without_comments, re.IGNORECASE)
             for match in matches:
                 if isinstance(match, tuple):
                     table = '.'.join(filter(None, match))
@@ -273,11 +298,13 @@ class GrafanaTableExtractor:
                 
                 # If sqlglot found nothing, try regex
                 if not tables:
+                    # Regex will handle comment removal internally with the cleaned query
                     tables = self.extract_tables_with_regex(cleaned_query)
                     
             except ParseError as e:
                 # Fallback to regex if sqlglot fails
                 logger.debug(f"sqlglot parse failed for '{query_info.title}', using regex fallback")
+                # Regex will handle comment removal internally with the cleaned query
                 tables = self.extract_tables_with_regex(cleaned_query)
             
             return ExtractionResult(
@@ -336,14 +363,14 @@ class GrafanaTableExtractor:
         print(f"📊 Dashboard: {dashboard_name}")
         print(f"{'='*80}\n")
         print(f"Query Statistics:")
-        print(f"  ✓ {variable_queries_with_tables + panel_queries_with_tables} queries with tables found")
-        print(f"    • {panel_queries_with_tables} panel queries")
-        print(f"    • {variable_queries_with_tables} variable queries")
-        print(f"  ⚠ {variable_queries_no_tables + panel_queries_no_tables} queries with no tables")
-        print(f"    • {panel_queries_no_tables} panel queries")
-        print(f"    • {variable_queries_no_tables} variable queries")
+        print(f"  ✓ {variable_queries_with_tables + panel_queries_with_tables} queries with tables found")
+        print(f"    • {panel_queries_with_tables} panel queries")
+        print(f"    • {variable_queries_with_tables} variable queries")
+        print(f"  ⚠ {variable_queries_no_tables + panel_queries_no_tables} queries with no tables")
+        print(f"    • {panel_queries_no_tables} panel queries")
+        print(f"    • {variable_queries_no_tables} variable queries")
         if failed_queries > 0:
-            print(f"  ✗ {failed_queries} queries failed to parse")
+            print(f"  ✗ {failed_queries} queries failed to parse")
         print()
         
         all_tables = set()
@@ -354,7 +381,7 @@ class GrafanaTableExtractor:
                 if result.tables:
                     print(f"✓ {result.query_info.title}")
                     for table in sorted(result.tables):
-                        print(f"    └─ {table}")
+                        print(f"    └─ {table}")
                         all_tables.add(table)
                         # Track usage with source type
                         if table not in table_usage:
@@ -366,10 +393,10 @@ class GrafanaTableExtractor:
                             table_usage[table]['variables'].add(result.query_info.title)
                 else:
                     print(f"⚠ {result.query_info.title}")
-                    print(f"    └─ No tables found")
+                    print(f"    └─ No tables found")
             else:
                 print(f"✗ {result.query_info.title}")
-                print(f"    └─ Error: {result.error_message[:80]}")
+                print(f"    └─ Error: {result.error_message[:80]}")
             print()
         
         # Print summary with smart deduplication
@@ -422,9 +449,9 @@ class GrafanaTableExtractor:
                     usage_parts.append(f"{variable_count} {var_plural}")
                 
                 usage_str = " + ".join(usage_parts) if usage_parts else "0 uses"
-                print(f"  🔹 {table} (used in {usage_str})")
+                print(f"  🔹 {table} (used in {usage_str})")
         else:
-            print("  No tables found in any queries")
+            print("  No tables found in any queries")
         
         print(f"\n{'='*80}\n")
     
